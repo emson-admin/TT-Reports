@@ -13,7 +13,7 @@ st.set_page_config(layout="wide")
 
 # Connect to Google Sheets
 scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-credentials = Credentials.from_service_account_file('credentials.json', scopes=scope)
+credentials = Credentials.from_service_account_info(st.secrets["gcp"], scopes=scope)
 gc = gspread.authorize(credentials)
 sh = gc.open('TikTok GMVMAX Ad Reports').worksheet('Data')
 
