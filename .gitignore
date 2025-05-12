@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg
+*.egg-info/
+.env
+.venv
+*.sqlite3
+
+# Streamlit & secrets
+credentials.json
+.streamlit/secrets.toml
