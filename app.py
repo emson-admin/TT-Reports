@@ -8,6 +8,15 @@ from google.oauth2.service_account import Credentials
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import PatternFill
 
+if "authenticated" not in st.session_state:
+    st.title("🔒 Protected Dashboard")
+    pw = st.text_input("Enter access password", type="password")
+    if pw == st.secrets["app_password"]:
+        st.session_state.authenticated = True
+        st.rerun()  # ✅ updated from experimental_rerun()
+    elif pw:
+        st.error("Incorrect password")
+    st.stop()
 
 st.set_page_config(layout="wide")
 
