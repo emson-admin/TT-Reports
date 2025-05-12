@@ -427,8 +427,8 @@ def run_main_app():
         numeric_columns = data.select_dtypes(include='number').columns.tolist()
 
         # Define desired default metrics
-        desired_default_main_metrics = ["cost", "gross_revenue", "roi"]
-        desired_default_side_metrics = ["orders_(sku)", "cost_per_order"]
+        desired_default_main_metrics = ["gross_revenue"] # Updated default
+        desired_default_side_metrics = ["orders_(sku)", "cost_per_order", "cost", "roi"] # Updated defaults
 
         # Filter defaults to only include available numeric columns
         actual_default_main_metrics = [m for m in desired_default_main_metrics if m in numeric_columns]
