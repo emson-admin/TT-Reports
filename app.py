@@ -7,33 +7,95 @@ import io
 from google.oauth2.service_account import Credentials
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import PatternFill
+from google.cloud import storage
+import uuid
+import requests
+import altair as alt # Moved import altair to top
+import os
 
 #page layout
 st.set_page_config(layout="wide")
 
-#Authenticate
-if "authenticated" not in st.session_state:
-    st.title("🔒 Protected Dashboard")
+# --- Helper Functions ---
+def upload_excel_to_gcs(excel_bytes, bucket_name, credentials_dict, original_filename="report.xlsx"):
+    """Uploads an Excel file (in bytes) to Google Cloud Storage."""
+    try:
+        buffer = io.BytesIO(excel_bytes)
+        buffer.seek(0)
 
-    # Combined form
-    with st.form("auth_form"):
-        pw = st.text_input("Enter viewer password", type="password")
-        admin_key = st.text_input("Enter admin key (optional)", type="password")
-        submitted = st.form_submit_button("Login")
+        # Create a unique filename, perhaps incorporating the original name
+        base, ext = os.path.splitext(original_filename)
+        filename = f"reports/{base}_{uuid.uuid4().hex}{ext}"
 
-    if submitted:
-        if pw == st.secrets["app_password"]:
-            st.session_state.authenticated = True
-            st.session_state.is_admin = admin_key == st.secrets["admin_key"]
-            st.rerun()
-        else:
-            st.error("Incorrect password")
-            st.stop()
-else:
-    # Ensure default state for admin if not explicitly set
-    if "is_admin" not in st.session_state:
-        st.session_state.is_admin = False
+        # Init GCS client
+        client = storage.Client.from_service_account_info(credentials_dict)
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(filename)
+        blob.upload_from_file(buffer, content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
+        # Construct the public URL manually for uniform bucket-level access
+        public_url = f"https://storage.googleapis.com/{bucket.name}/{blob.name}"
+        return public_url
+    except Exception as e:
+        st.error(f"Error uploading Excel to GCS: {e}")
+        return None
+
+def upload_chart_to_gcs(chart, bucket_name, credentials_dict):
+    """Uploads an Altair chart image to Google Cloud Storage."""
+    try:
+        # Convert chart to PNG in memory
+        buffer = io.BytesIO()
+        # Ensure chart object is valid before saving
+        if chart is None:
+            st.error("Chart object is None, cannot upload.")
+            return None
+        chart.save(buffer, format='png', scale_factor=2.0)
+        buffer.seek(0)
+
+        # Create a unique filename
+        filename = f"charts/chart_{uuid.uuid4().hex}.png"
+
+        # Init GCS client
+        client = storage.Client.from_service_account_info(credentials_dict)
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(filename)
+        blob.upload_from_file(buffer, content_type='image/png')
+
+        # Make it publicly accessible - REMOVED due to Uniform Bucket-Level Access
+        # blob.make_public() 
+        
+        # Construct the public URL manually for uniform bucket-level access
+        # This assumes the bucket is configured for public read access in GCP IAM.
+        public_url = f"https://storage.googleapis.com/{bucket.name}/{blob.name}"
+        return public_url
+    except Exception as e:
+        st.error(f"Error uploading chart to GCS: {e}")
+        return None
+
+def generate_specific_metric_chart(chart_df, metric_col_name, display_metric_name, date_col='report_date', campaign_col='campaign_name'):
+    """Generates an Altair chart for a single metric using pre-aggregated data."""
+    if metric_col_name not in chart_df.columns:
+        st.warning(f"Metric column '{metric_col_name}' not found in chart data for '{display_metric_name}'.")
+        return None
+    
+    chart = alt.Chart(chart_df).mark_line(point=True).encode(
+        x=alt.X(f'{date_col}:T', title='Date'),
+        y=alt.Y(f'{metric_col_name}:Q', title=display_metric_name.replace("_", " ").title(), scale=alt.Scale(zero=True)),
+        color=alt.Color(f'{campaign_col}:N', legend=alt.Legend(title="Campaign")),
+        tooltip=[
+            alt.Tooltip(f'{date_col}:T', title="Date"),
+            alt.Tooltip(f'{campaign_col}:N', title="Campaign"),
+            alt.Tooltip(f'{metric_col_name}:Q', title=display_metric_name.replace("_", " ").title(), format=",.2f")
+        ]
+    ).properties(
+        width=600,
+        height=300,
+        title=f"{display_metric_name.replace('_', ' ').title()} Over Time"
+    ).interactive()
+    return chart
+
+# --- Main Application Logic ---
+def run_main_app():
     # Connect to Google Sheets
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     credentials = Credentials.from_service_account_info(st.secrets["gcp"], scopes=scope)
@@ -150,7 +212,7 @@ else:
                                     on=['campaign_id', 'report_date'],
                                     how='left',
                                     indicator=True
-                                ).query('_merge == "left_only"').drop(columns=['_merge'])
+                                ).query('_merge == "left_only"').drop(columns(['_merge']))
                                 st.info(f"✅ Skipped {len(duplicate_rows)} duplicate rows.")
                         else:
                             # No duplicates: just combine everything
@@ -259,7 +321,6 @@ else:
             value_name='Value'
         )
 
-        import altair as alt
         line_chart = alt.Chart(melted).mark_line(point=True).encode(
             x='report_date:T',
             y='Value:Q',
@@ -420,6 +481,131 @@ else:
     else:
         st.info("No data to export for the selected filters.")
 
+    # 📧 Send Weekly Email Data (GCS Upload & Zapier) - Admin Only
+    if st.session_state.get("is_admin"):
+        st.subheader("📧 Send Weekly Email Data")
+
+        # Condition to show the button: filtered_data, summary_df, start_str, end_str, and output (Excel bytes) must be available
+        if not filtered_data.empty and 'summary_df' in locals() and 'start_str' in locals() and 'end_str' in locals() and 'output' in locals() and 'file_name' in locals():
+            if st.button("🚀 Send Data to Zapier for Weekly Email"):
+                if "gcp" not in st.secrets or "gcs_bucket_name" not in st.secrets:
+                    st.error("GCP credentials or GCS bucket name not found in secrets.")
+                elif "zapier_webhook_url" not in st.secrets:
+                    st.error("Zapier webhook URL not found in secrets.")
+                else:
+                    with st.spinner("Preparing charts and sending data to Zapier..."):
+                        # Prepare data for the 5 specific charts
+                        # Ensure 'orders_(sku)' is the correct column name from your data
+                        required_metrics_for_charts = {
+                            'cost': 'Cost',
+                            'gross_revenue': 'Gross Revenue',
+                            'orders_(sku)': 'Orders', # Assuming 'orders' in prompt means 'orders_(sku)'
+                        }
+                        
+                        # Aggregate data for sum-based metrics
+                        zapier_chart_data_agg = filtered_data.groupby(['report_date', 'campaign_name']).agg(
+                            **{metric: (metric, 'sum') for metric in required_metrics_for_charts.keys()}
+                        ).reset_index()
+
+                        # Calculate ROI and CPO for these aggregated groups
+                        zapier_chart_data_agg['roi'] = (zapier_chart_data_agg['gross_revenue'] / zapier_chart_data_agg['cost'])
+                        zapier_chart_data_agg['cost_per_order'] = (zapier_chart_data_agg['cost'] / zapier_chart_data_agg['orders_(sku)'])
+                        
+                        # Handle potential NaN/inf values from division
+                        zapier_chart_data_agg.replace([float('inf'), -float('inf')], pd.NA, inplace=True) # Use pd.NA for consistency
+                        zapier_chart_data_agg['roi'] = zapier_chart_data_agg['roi'].fillna(0)
+                        zapier_chart_data_agg['cost_per_order'] = zapier_chart_data_agg['cost_per_order'].fillna(0)
+
+                        target_charts_to_upload = {
+                            "cost": "Cost",
+                            "gross_revenue": "Gross Revenue",
+                            "roi": "ROI",
+                            "orders_(sku)": "Orders", # Maps to 'orders_(sku)' column
+                            "cost_per_order": "Cost Per Order"
+                        }
+                        
+                        zapier_chart_urls = {}
+                        all_charts_uploaded = True
+                        excel_report_url = None
+
+                        # 1. Upload Excel Report
+                        st.write("Uploading Excel report to GCS...")
+                        excel_bytes_to_upload = output.getvalue() # Get bytes from the existing 'output' BytesIO
+                        excel_report_url = upload_excel_to_gcs(
+                            excel_bytes_to_upload,
+                            st.secrets["gcs_bucket_name"],
+                            st.secrets["gcp"],
+                            original_filename=file_name # Use the generated file_name
+                        )
+
+                        if not excel_report_url:
+                            st.error("Failed to upload Excel report. Aborting Zapier send.")
+                            all_charts_uploaded = False # Use this flag to prevent further processing
+                        else:
+                            st.write(f"Excel report uploaded: {excel_report_url}")
+
+                        # 2. Upload Charts (only if Excel upload was successful)
+                        if all_charts_uploaded: # Check if Excel upload was successful
+                            for metric_col, display_name in target_charts_to_upload.items():
+                                st.write(f"Generating chart for {display_name}...")
+                                chart_obj = generate_specific_metric_chart(
+                                    chart_df=zapier_chart_data_agg, # Use the aggregated and calculated data
+                                    metric_col_name=metric_col,
+                                    display_metric_name=display_name
+                                )
+                                if chart_obj:
+                                    st.write(f"Uploading {display_name} chart to GCS...")
+                                    image_url = upload_chart_to_gcs(
+                                        chart_obj,
+                                        st.secrets["gcs_bucket_name"],
+                                        st.secrets["gcp"]
+                                    )
+                                    if image_url:
+                                        zapier_chart_urls[f"{metric_col.replace('_(sku)', '')}_url"] = image_url # e.g., orders_url
+                                        st.write(f"{display_name} chart uploaded: {image_url}")
+                                    else:
+                                        st.error(f"Failed to upload {display_name} chart.")
+                                        all_charts_uploaded = False
+                                        break # Stop if one chart fails
+                                else:
+                                    st.error(f"Failed to generate chart for {display_name}.")
+                                    all_charts_uploaded = False
+                                    break # Stop if one chart fails to generate
+
+
+                        if all_charts_uploaded and excel_report_url and len(zapier_chart_urls) == len(target_charts_to_upload):
+                            # Prepare payload for Zapier
+                            payload = {
+                                "start_date": start_str, # Defined in export section
+                                "end_date": end_str,     # Defined in export section
+                                "summary_data": summary_df.to_dict(orient="records"), # summary_df from export section
+                                "excel_report_url": excel_report_url, # Add Excel report URL
+                                "chart_images": zapier_chart_urls
+                            }
+
+                            # Send to Zapier
+                            try:
+                                response = requests.post(st.secrets["zapier_webhook_url"], json=payload)
+                                response.raise_for_status() # Raise an exception for HTTP errors
+                                st.success("✅ Data and chart images successfully sent to Zapier!")
+                                st.balloons()
+                            except requests.exceptions.RequestException as e:
+                                st.error(f"❌ Failed to send data to Zapier: {e}")
+                                if 'response' in locals() and response is not None:
+                                    st.error(f"Zapier response: {response.text}")
+                                else:
+                                    st.error("No response object from Zapier.")
+                        elif not excel_report_url:
+                            # Error already shown by upload_excel_to_gcs or the check above
+                            pass 
+                        elif not all_charts_uploaded:
+                            st.error("❌ Not all charts were uploaded successfully. Data not sent to Zapier.")
+                        else:
+                            st.error("❌ Chart generation or upload failed for some charts. Data not sent to Zapier.")
+        elif 'summary_df' not in locals() or 'output' not in locals():
+            st.info("Generate an export report first (which creates summary data and the Excel file) to enable sending data to Zapier.")
+        else: # filtered_data is empty
+            st.info("No data available for the current filters to send to Zapier.")
 
     # Historical data query
     if st.button('📊 View Historical Data'):
@@ -427,3 +613,67 @@ else:
         history_df = pd.DataFrame(records)
         st.write("Historical Ad Report Data:")
         st.dataframe(history_df)
+
+# --- Authentication Flow ---
+ENABLE_AUTH = os.getenv("STREAMLIT_ENABLE_AUTH", "false").lower() == "true"
+
+if not ENABLE_AUTH:
+    # Authentication is disabled, grant full access by default for local development
+    if "authenticated" not in st.session_state: # Initialize if not already set by a previous run
+        st.session_state.authenticated = True
+        st.session_state.is_admin = True
+    st.sidebar.info("🔑 Authentication Disabled (Dev Mode)")
+    run_main_app()
+else:
+    # Authentication is enabled
+    if "authenticated" not in st.session_state:
+        st.title("🔒 Protected Dashboard")
+        with st.form("auth_form"):
+            pw = st.text_input("Enter viewer password", type="password")
+            admin_key = st.text_input("Enter admin key (optional)", type="password")
+            submitted = st.form_submit_button("Login")
+
+        if submitted:
+            if pw == st.secrets["app_password"]:
+                st.session_state.authenticated = True
+                st.session_state.is_admin = admin_key == st.secrets["admin_key"]
+                st.rerun()
+            else:
+                st.error("Incorrect password")
+        st.stop() # Stop execution if login form is shown and not successfully submitted
+    
+    # If we reach here, authentication is enabled AND user is authenticated.
+    
+    # Sidebar elements for authenticated users when auth is enabled
+    with st.sidebar:
+        if st.button("🔒 Logout"):
+            if "authenticated" in st.session_state:
+                del st.session_state.authenticated
+            if "is_admin" in st.session_state:
+                del st.session_state.is_admin
+            st.rerun()
+
+        # Allow non-admins to enter admin key later (only if auth is enabled)
+        # Ensure is_admin exists before checking its value
+        if "is_admin" not in st.session_state: # Should be set by login, but as a safeguard
+            st.session_state.is_admin = False
+            
+        if st.session_state.authenticated and not st.session_state.is_admin:
+            with st.expander("🔑 Admin Access"):
+                with st.form("admin_key_form"):
+                    admin_key_input = st.text_input("Enter admin key to enable uploads", type="password")
+                    admin_key_submitted = st.form_submit_button("Unlock Admin Features")
+
+                if admin_key_submitted:
+                    if admin_key_input == st.secrets["admin_key"]:
+                        st.session_state.is_admin = True
+                        st.sidebar.success("Admin features unlocked!")
+                        st.rerun()
+                    elif admin_key_input: # if a key was entered but it's wrong
+                        st.sidebar.error("Incorrect admin key.")
+    
+    # Ensure default state for admin if not explicitly set after login/admin key attempt
+    if "is_admin" not in st.session_state:
+        st.session_state.is_admin = False
+
+    run_main_app()
