@@ -57,18 +57,22 @@ def render_top_campaigns(filtered_data):
         if 'cost' in filtered_data.columns:
             metrics_to_aggregate.append('cost')
             
-        campaign_summary = (filtered_data
+        # Get summary for ALL campaigns (we'll use this later for the remaining campaigns table)
+        all_campaign_summary = (filtered_data
                           .groupby('campaign_name')[metrics_to_aggregate]
                           .sum()
                           .reset_index()
-                          .sort_values(rank_column, ascending=False)
-                          .head(3))
+                          .sort_values(rank_column, ascending=False))
         
         # Calculate ROI if we have revenue and cost data
-        if 'gross_revenue' in campaign_summary.columns and 'cost' in campaign_summary.columns:
-            campaign_summary['roi'] = campaign_summary['gross_revenue'] / campaign_summary['cost']
+        if 'gross_revenue' in all_campaign_summary.columns and 'cost' in all_campaign_summary.columns:
+            all_campaign_summary['roi'] = all_campaign_summary['gross_revenue'] / all_campaign_summary['cost']
             # Replace infinite values (division by zero) with 0
-            campaign_summary['roi'] = campaign_summary['roi'].replace([float('inf'), -float('inf')], 0)
+            all_campaign_summary['roi'] = all_campaign_summary['roi'].replace([float('inf'), -float('inf')], 0)
+            all_campaign_summary['roi'] = all_campaign_summary['roi'].fillna(0)
+        
+        # Get top 3 for the featured display AFTER calculating ROI
+        campaign_summary = all_campaign_summary.head(3)
         
         if not campaign_summary.empty:
             st.markdown("### 🏆 Top Campaigns")
@@ -103,6 +107,10 @@ def render_top_campaigns(filtered_data):
                 # Prepare metrics with consistent formatting
                 metrics_html = f"<p class='campaign-metrics'>{metric_display}: <strong>{int(row[rank_column]):,}</strong></p>"
                 
+                # Add spend (cost)
+                if 'cost' in row:
+                    metrics_html += f"<p class='campaign-metrics'>Spend: <strong>${row['cost']:,.2f}</strong></p>"
+                
                 if 'gross_revenue' in row:
                     metrics_html += f"<p class='campaign-metrics'>Revenue: <strong>${row['gross_revenue']:,.2f}</strong></p>"
                     
@@ -124,6 +132,57 @@ def render_top_campaigns(filtered_data):
                     <p>&nbsp;</p>
                 </div>
                 """, unsafe_allow_html=True)
+            
+            # Display the remaining campaigns in a table format
+            if len(all_campaign_summary) > 3:
+                st.markdown("### 📊 Remaining Campaigns")
+                
+                # Get the remaining campaigns (after the top 3)
+                remaining_campaigns = all_campaign_summary.iloc[3:].copy()
+                
+                # Format the columns for display
+                display_df = remaining_campaigns.copy()
+                
+                # Format the numeric columns
+                if 'cost' in display_df.columns:
+                    display_df['cost'] = display_df['cost'].apply(lambda x: f"${x:,.2f}")
+                
+                if 'gross_revenue' in display_df.columns:
+                    display_df['gross_revenue'] = display_df['gross_revenue'].apply(lambda x: f"${x:,.2f}")
+                
+                if 'roi' in display_df.columns:
+                    display_df['roi'] = display_df['roi'].apply(lambda x: f"{x:.2f}x")
+                
+                if rank_column == 'orders_(sku)' and 'orders_(sku)' in display_df.columns:
+                    display_df['orders_(sku)'] = display_df['orders_(sku)'].apply(lambda x: f"{int(x):,}")
+                
+                # Rename columns for better display
+                column_rename = {
+                    'campaign_name': 'Campaign',
+                    'cost': 'Spend',
+                    'gross_revenue': 'Revenue',
+                    'roi': 'ROI',
+                    'orders_(sku)': 'Orders'
+                }
+                display_df = display_df.rename(columns=column_rename)
+                
+                # Reorder columns for consistent display
+                ordered_columns = ['Campaign']
+                if 'Orders' in display_df.columns:
+                    ordered_columns.append('Orders')
+                if 'Spend' in display_df.columns:
+                    ordered_columns.append('Spend')
+                if 'Revenue' in display_df.columns:
+                    ordered_columns.append('Revenue')
+                if 'ROI' in display_df.columns:
+                    ordered_columns.append('ROI')
+                
+                # Filter to only include columns that exist
+                ordered_columns = [col for col in ordered_columns if col in display_df.columns]
+                display_df = display_df[ordered_columns]
+                
+                # Display the table
+                st.dataframe(display_df, use_container_width=True)
 
 def render_kpi_summary(filtered_data):
     """Render KPI summary metrics."""

@@ -46,18 +46,18 @@ def send_weekly_email_data(filtered_data, export_data, secrets):
 def prepare_and_upload_data(filtered_data, excel_bytes, file_name, start_str, end_str, summary_df, secrets):
     """Prepare data for Zapier, including chart generation and uploads to GCS."""
     # Define required metrics for charts
-    required_metrics_for_charts = {
-        'cost': 'Cost',
-        'gross_revenue': 'Gross Revenue',
-        'orders_(sku)': 'Orders',
+    target_charts_to_upload = {
+        "gross_revenue": "Gross Revenue",
+        "cost": "Cost",
+        "roi": "ROI",
+        "orders_(sku)": "Orders",
+        "cost_per_order": "Cost Per Order"
     }
     
     # Aggregate data for sum-based metrics
-    zapier_chart_data_agg = filtered_data.groupby(['report_date', 'campaign_name']).agg(
-        **{metric: (metric, 'sum') for metric in required_metrics_for_charts.keys()}
-    ).reset_index()
-
-    # Calculate ROI and CPO for these aggregated groups
+    zapier_chart_data_agg = filtered_data.groupby(['report_date', 'campaign_name'])[list(target_charts_to_upload.keys())].sum().reset_index()
+    
+    # Calculate ROI and CPO (these are calculated metrics)
     zapier_chart_data_agg['roi'] = (zapier_chart_data_agg['gross_revenue'] / zapier_chart_data_agg['cost'])
     zapier_chart_data_agg['cost_per_order'] = (zapier_chart_data_agg['cost'] / zapier_chart_data_agg['orders_(sku)'])
     
@@ -65,15 +65,6 @@ def prepare_and_upload_data(filtered_data, excel_bytes, file_name, start_str, en
     zapier_chart_data_agg.replace([float('inf'), -float('inf')], pd.NA, inplace=True)
     zapier_chart_data_agg['roi'] = zapier_chart_data_agg['roi'].fillna(0)
     zapier_chart_data_agg['cost_per_order'] = zapier_chart_data_agg['cost_per_order'].fillna(0)
-
-    # Define charts to generate and upload
-    target_charts_to_upload = {
-        "cost": "Cost",
-        "gross_revenue": "Gross Revenue",
-        "roi": "ROI",
-        "orders_(sku)": "Orders",
-        "cost_per_order": "Cost Per Order"
-    }
     
     # Upload Excel Report first
     st.write("Uploading Excel report to GCS...")
@@ -119,16 +110,24 @@ def prepare_and_upload_data(filtered_data, excel_bytes, file_name, start_str, en
         else:
             all_charts_uploaded = False
             return {"success": False, "error": f"Failed to generate chart for {display_name}."}
+    
+    # Calculate summary metrics for Zapier
+    summary_metrics = get_summary_metrics(filtered_data)
+    
+    # Get top campaigns and remaining campaigns data
+    top_campaigns_data, remaining_campaigns_data = get_campaign_data(filtered_data)
 
     # If all uploads succeeded, send to Zapier
-    if all_charts_uploaded and excel_report_url and len(zapier_chart_urls) == len(target_charts_to_upload):
+    if all_charts_uploaded and excel_report_url:
         # Prepare payload for Zapier
         payload = {
             "start_date": start_str,
             "end_date": end_str,
-            "summary_data": summary_df.to_dict(orient="records"),
             "excel_report_url": excel_report_url,
-            "chart_images": zapier_chart_urls
+            "chart_images": zapier_chart_urls,
+            "summary_metrics": summary_metrics,
+            "top_campaigns": top_campaigns_data,
+            "remaining_campaigns": remaining_campaigns_data
         }
 
         # Send to Zapier
@@ -143,3 +142,122 @@ def prepare_and_upload_data(filtered_data, excel_bytes, file_name, start_str, en
             return {"success": False, "error": error_message}
     else:
         return {"success": False, "error": "Chart generation or upload failed."}
+
+def get_summary_metrics(filtered_data):
+    """Calculate summary metrics for Zapier."""
+    # Ensure all required metric columns exist
+    kpi_metrics = ['cost', 'gross_revenue', 'orders_(sku)', 'roi', 'cost_per_order']
+    existing_kpi_metrics = [m for m in kpi_metrics if m in filtered_data.columns]
+
+    total_cost = filtered_data['cost'].sum() if 'cost' in existing_kpi_metrics else 0
+    total_revenue = filtered_data['gross_revenue'].sum() if 'gross_revenue' in existing_kpi_metrics else 0
+    total_orders = filtered_data['orders_(sku)'].sum() if 'orders_(sku)' in existing_kpi_metrics else 0
+    avg_roi = (total_revenue / total_cost) if total_cost > 0 else 0
+    avg_cpo = filtered_data['cost_per_order'].mean() if 'cost_per_order' in existing_kpi_metrics else 0
+    avg_cpo = 0 if pd.isna(avg_cpo) else avg_cpo
+
+    return {
+        "total_cost": f"${total_cost:,.2f}",
+        "total_revenue": f"${total_revenue:,.2f}",
+        "total_orders": f"{int(total_orders):,}",
+        "avg_roi": f"{avg_roi:.2f}x",
+        "avg_cost_per_order": f"${avg_cpo:,.2f}",
+        "raw_values": {
+            "total_cost": total_cost,
+            "total_revenue": total_revenue,
+            "total_orders": int(total_orders),
+            "avg_roi": avg_roi,
+            "avg_cost_per_order": avg_cpo
+        }
+    }
+
+def get_campaign_data(filtered_data):
+    """Get top 3 campaigns and remaining campaigns data for Zapier."""
+    if filtered_data.empty:
+        return [], []
+        
+    # Determine which metric to use for ranking
+    rank_column = 'orders_(sku)' if 'orders_(sku)' in filtered_data.columns else 'gross_revenue'
+    
+    # Set up metrics to aggregate
+    metrics_to_aggregate = [rank_column]
+    if 'gross_revenue' in filtered_data.columns and rank_column != 'gross_revenue':
+        metrics_to_aggregate.append('gross_revenue')
+    if 'cost' in filtered_data.columns:
+        metrics_to_aggregate.append('cost')
+    
+    # Aggregate data
+    campaign_summary = (filtered_data
+                      .groupby('campaign_name')[metrics_to_aggregate]
+                      .sum()
+                      .reset_index()
+                      .sort_values(rank_column, ascending=False))
+    
+    # Calculate ROI
+    if 'gross_revenue' in campaign_summary.columns and 'cost' in campaign_summary.columns:
+        campaign_summary['roi'] = campaign_summary['gross_revenue'] / campaign_summary['cost']
+        campaign_summary['roi'] = campaign_summary['roi'].replace([float('inf'), -float('inf')], 0).fillna(0)
+    
+    # Format data for top 3 campaigns
+    top_campaigns_data = []
+    if not campaign_summary.empty:
+        for _, row in campaign_summary.head(3).iterrows():
+            campaign_data = {
+                "name": row['campaign_name'],
+                "metrics": {}
+            }
+            
+            # Add orders/revenue (ranking metric)
+            if rank_column == 'orders_(sku)':
+                campaign_data["metrics"]["orders"] = int(row[rank_column])
+                campaign_data["metrics"]["orders_formatted"] = f"{int(row[rank_column]):,}"
+            
+            # Add cost
+            if 'cost' in row:
+                campaign_data["metrics"]["cost"] = float(row['cost'])
+                campaign_data["metrics"]["cost_formatted"] = f"${row['cost']:,.2f}"
+            
+            # Add revenue
+            if 'gross_revenue' in row:
+                campaign_data["metrics"]["revenue"] = float(row['gross_revenue'])
+                campaign_data["metrics"]["revenue_formatted"] = f"${row['gross_revenue']:,.2f}"
+            
+            # Add ROI
+            if 'roi' in row:
+                campaign_data["metrics"]["roi"] = float(row['roi'])
+                campaign_data["metrics"]["roi_formatted"] = f"{row['roi']:.2f}x"
+            
+            top_campaigns_data.append(campaign_data)
+    
+    # Format data for remaining campaigns (after top 3)
+    remaining_campaigns_data = []
+    if len(campaign_summary) > 3:
+        for _, row in campaign_summary.iloc[3:].iterrows():
+            campaign_data = {
+                "name": row['campaign_name'],
+                "metrics": {}
+            }
+            
+            # Add orders/revenue (ranking metric)
+            if rank_column == 'orders_(sku)':
+                campaign_data["metrics"]["orders"] = int(row[rank_column])
+                campaign_data["metrics"]["orders_formatted"] = f"{int(row[rank_column]):,}"
+            
+            # Add cost
+            if 'cost' in row:
+                campaign_data["metrics"]["cost"] = float(row['cost'])
+                campaign_data["metrics"]["cost_formatted"] = f"${row['cost']:,.2f}"
+            
+            # Add revenue
+            if 'gross_revenue' in row:
+                campaign_data["metrics"]["revenue"] = float(row['gross_revenue'])
+                campaign_data["metrics"]["revenue_formatted"] = f"${row['gross_revenue']:,.2f}"
+            
+            # Add ROI
+            if 'roi' in row:
+                campaign_data["metrics"]["roi"] = float(row['roi'])
+                campaign_data["metrics"]["roi_formatted"] = f"{row['roi']:.2f}x"
+            
+            remaining_campaigns_data.append(campaign_data)
+    
+    return top_campaigns_data, remaining_campaigns_data
