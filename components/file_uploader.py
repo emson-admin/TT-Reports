@@ -154,6 +154,36 @@ def upload_data_to_sheets(all_data, sh):
     # Determine next row to write to
     next_row = len(existing_records) + 1
 
+    # Calculate total rows needed for the new data
+    num_new_rows = len(rows_to_upload)
+    
+    # Get current max rows in the sheet
+    current_max_rows = sh.row_count
+
+    # Check if we need to add more rows to the sheet
+    # next_row is 1-based, num_new_rows is the count of rows to add.
+    # If next_row is 1 (empty sheet after headers), and we add 10 rows, we need 10 rows.
+    # If next_row is 1114 (last current row), and we add 5 rows, we need 1113 (start) + 5 = 1118 rows.
+    # The actual row number we will write up to is next_row + num_new_rows -1 (if next_row is where data starts)
+    # However, if is_first_upload is true, rows_to_upload includes headers.
+    
+    # Simplified logic: what's the highest row number we'll touch?
+    # If it's a first upload, rows_to_upload includes headers, so num_new_rows is correct.
+    # If not, next_row is the first empty row, and we add num_new_rows data rows.
+    # The highest row index will be next_row + num_new_rows - 1.
+    
+    required_rows_in_sheet = next_row + num_new_rows -1
+    if not is_first_upload: # if not first upload, headers are not in rows_to_upload
+        pass # next_row is already the first empty row, so required_rows_in_sheet is correct
+    else: # if first_upload, next_row is 1, and rows_to_upload includes headers
+        required_rows_in_sheet = num_new_rows # We need as many rows as we are uploading (data + header)
+
+
+    if required_rows_in_sheet > current_max_rows:
+        rows_to_add = required_rows_in_sheet - current_max_rows
+        sh.add_rows(rows_to_add)
+        st.info(f"Added {rows_to_add} row(s) to the sheet to accommodate new data.")
+
     # Upload to Google Sheet
     sh.update(f'A{next_row}', rows_to_upload)
 
