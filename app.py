@@ -21,6 +21,32 @@ def run_main_app():
     # App title
     st.title('📈 Weekly Ad Report Uploader')
 
+    # Load data from Google Sheets
+    data = load_data(sheet)
+
+    # Display latest report dates per account
+    if not data.empty and 'account_name' in data.columns and 'report_date' in data.columns:
+        # Ensure report_date is datetime
+        data['report_date'] = pd.to_datetime(data['report_date'], errors='coerce')
+        # Drop rows where report_date might be NaT after conversion
+        valid_dates_data = data.dropna(subset=['report_date'])
+        if not valid_dates_data.empty:
+            latest_dates = valid_dates_data.loc[valid_dates_data.groupby('account_name')['report_date'].idxmax()]
+            latest_dates_sorted = latest_dates.sort_values(by='report_date', ascending=False)
+            
+            if not latest_dates_sorted.empty:
+                notification_message = "🔔 **Latest Report Dates:**\n\n"
+                for _, row in latest_dates_sorted.iterrows():
+                    account_name = row['account_name']
+                    latest_date = row['report_date'].strftime('%Y-%m-%d')
+                    notification_message += f"- **{account_name}:** {latest_date}\n"
+                st.info(notification_message)
+            else:
+                st.info("ℹ️ No report dates found to display.")
+        else:
+            st.info("ℹ️ No valid report dates found to determine latest uploads.")
+
+
     # Clear file uploader if needed (after upload completes)
     if st.session_state.get("clear_uploader"):
         st.session_state.pop("uploader", None)
@@ -30,8 +56,8 @@ def run_main_app():
     if st.session_state.get("is_admin"):
         render_file_uploader(sheet)
     
-    # Load data from Google Sheets
-    data = load_data(sheet)
+    # Load data from Google Sheets - MOVED UP
+    # data = load_data(sheet)
 
     # Check for report_date column
     if 'report_date' not in data.columns or data['report_date'].isnull().all():

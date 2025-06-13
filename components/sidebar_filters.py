@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from utils.helpers import extract_account
+from datetime import date, timedelta # Added for date calculations
 
 def render_sidebar_filters(data):
     """Render all sidebar filters and return the selected values."""
@@ -8,9 +9,124 @@ def render_sidebar_filters(data):
     
     from components.data_loader import get_date_range_values
     min_date_val, max_date_val = get_date_range_values(data)
+    today = date.today()
+
+    # Initialize session state for date range, ensuring they are within current data bounds
+    if 'start_date' not in st.session_state or st.session_state.start_date is None:
+        st.session_state.start_date = min_date_val
+    else:
+        # Ensure start_date is within the global min/max bounds
+        st.session_state.start_date = max(st.session_state.start_date, min_date_val)
+        st.session_state.start_date = min(st.session_state.start_date, max_date_val)
+
+    if 'end_date' not in st.session_state or st.session_state.end_date is None:
+        st.session_state.end_date = max_date_val
+    else:
+        # Ensure end_date is within the global min/max bounds
+        st.session_state.end_date = min(st.session_state.end_date, max_date_val)
+        st.session_state.end_date = max(st.session_state.end_date, min_date_val)
+
+    # Ensure start_date is not after end_date
+    if st.session_state.start_date > st.session_state.end_date:
+        st.session_state.start_date = st.session_state.end_date # Adjust start_date to be same as end_date
+
+    quick_options = [
+        "Custom Range", "Yesterday", "Last 7 Days", "Last 14 Days",
+        "Current Month to Date", "Previous Month", "Last 90 Days", "All-Time"
+    ]
+
+    # Callback for when date_input is manually changed
+    def on_date_input_change():
+        date_value_from_widget = st.session_state.report_date_range_input_key
+        
+        # Ensure the value from the date_input widget is a 2-element tuple.
+        # If not (e.g., if it's a 1-tuple as the error suggests, or None, or not a tuple),
+        # then the selection process is incomplete or the widget state is unexpected.
+        # In such cases, we return early to prevent errors and wait for a valid 2-tuple.
+        if not (isinstance(date_value_from_widget, tuple) and len(date_value_from_widget) == 2):
+            return
+
+        new_start, new_end = date_value_from_widget
+
+        # Proceed to update session state only if both dates are selected (i.e., not None).
+        # If one or both are None, it means the user is still in the process of selecting
+        # the range or has cleared one/both dates in the widget. We don't want to
+        # update our main start_date/end_date session variables with None values
+        # or reflect an incomplete range as "Custom Range" prematurely.
+        if new_start is not None and new_end is not None:
+            # Ensure chronological order for the dates stored in session state.
+            if new_start > new_end:
+                st.session_state.start_date = new_end
+                st.session_state.end_date = new_start
+            else:
+                st.session_state.start_date = new_start
+                st.session_state.end_date = new_end
+            
+            # If the dates were successfully updated via the date_input widget,
+            # then the selection is now a "Custom Range".
+            st.session_state.quick_date_preset_selector = "Custom Range"
+
+    # Callback for when quick_date_preset_selector changes
+    def on_quick_select_change():
+        preset = st.session_state.quick_date_preset_selector
+        
+        # These are captured from the outer scope of render_sidebar_filters
+        # today, min_date_val, max_date_val
+
+        if preset == "Yesterday":
+            st.session_state.start_date = today - timedelta(days=1)
+            st.session_state.end_date = today - timedelta(days=1)
+        elif preset == "Last 7 Days":
+            st.session_state.start_date = today - timedelta(days=6)
+            st.session_state.end_date = today
+        elif preset == "Last 14 Days":
+            st.session_state.start_date = today - timedelta(days=13)
+            st.session_state.end_date = today
+        elif preset == "Current Month to Date":
+            st.session_state.start_date = today.replace(day=1)
+            st.session_state.end_date = today
+        elif preset == "Previous Month":
+            first_day_current_month = today.replace(day=1)
+            last_day_previous_month = first_day_current_month - timedelta(days=1)
+            first_day_previous_month = last_day_previous_month.replace(day=1)
+            st.session_state.start_date = first_day_previous_month
+            st.session_state.end_date = last_day_previous_month
+        elif preset == "Last 90 Days":
+            st.session_state.start_date = today - timedelta(days=89)
+            st.session_state.end_date = today
+        elif preset == "All-Time":
+            st.session_state.start_date = min_date_val
+            st.session_state.end_date = max_date_val
+        # If "Custom Range" is selected, no date changes are made here;
+        # the date_input widget remains the source of truth for custom dates.
+
+    # Determine the initial index for the selectbox based on session state
+    # Default to "Custom Range" if the specific preset is not found or not set
+    try:
+        current_preset_index = quick_options.index(st.session_state.get('quick_date_preset_selector', "Custom Range"))
+    except ValueError:
+        current_preset_index = 0 # Default to "Custom Range"
+
+    st.sidebar.selectbox(
+        "Quick Date Range",
+        options=quick_options,
+        key='quick_date_preset_selector',
+        on_change=on_quick_select_change,
+        index=current_preset_index
+    )
     
-    # Date Range Filter
-    date_range = st.sidebar.date_input("Report Date Range", value=(min_date_val, max_date_val))
+    # Date Range Filter input field
+    # Its value is driven by session state, which can be updated by the selectbox or manual input.
+    st.sidebar.date_input(
+        "Report Date Range", # Label for the date_input
+        value=(st.session_state.start_date, st.session_state.end_date),
+        min_value=min_date_val,
+        max_value=max_date_val,
+        key='report_date_range_input_key', # Key to access its value and for on_change
+        on_change=on_date_input_change
+    )
+    
+    final_date_range = (st.session_state.start_date, st.session_state.end_date)
     
     # Account Filter
     selected_accounts = []
@@ -46,7 +162,7 @@ def render_sidebar_filters(data):
     )
     
     return {
-        "date_range": date_range,
+        "date_range": final_date_range, # Use the session state managed date range
         "selected_accounts": selected_accounts,
         "selected_campaigns": selected_campaigns,
         "main_metrics": main_metrics,

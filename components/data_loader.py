@@ -12,6 +12,38 @@ def connect_to_google_sheets(secrets):
     sh = gc.open('TikTok GMVMAX Ad Reports').worksheet('Data')
     return sh
 
+def deduplicate_sheet_data(sheet):
+    """Remove duplicate rows from the Google Sheet and return count of duplicates removed."""
+    # Load all data
+    df = pd.DataFrame(sheet.get_all_records())
+    if df.empty:
+        return 0
+    
+    # Store original count
+    original_count = len(df)
+    
+    # Remove duplicates (keep first occurrence)
+    df_deduplicated = df.drop_duplicates(keep='first')
+    duplicates_removed = original_count - len(df_deduplicated)
+    
+    if duplicates_removed > 0:
+        # Clear the sheet and rewrite with deduplicated data
+        sheet.clear()
+        
+        # Convert to list of lists for upload
+        headers = df_deduplicated.columns.tolist()
+        data_rows = df_deduplicated.astype(str).values.tolist()
+        all_data = [headers] + data_rows
+        
+        # Upload deduplicated data
+        sheet.update('A1', all_data)
+        
+        st.success(f"✅ Removed {duplicates_removed} duplicate row(s) from the sheet.")
+    else:
+        st.info("ℹ️ No duplicate rows found in the sheet.")
+    
+    return duplicates_removed
+
 @st.cache_data(ttl=0)
 def load_data(_sheet):
     """

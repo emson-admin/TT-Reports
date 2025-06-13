@@ -7,6 +7,20 @@ from utils.helpers import extract_account
 def render_file_uploader(sheet):
     """Render file upload functionality for admin users."""
     st.markdown("## 🔼 Upload Daily Reports")
+    
+    # Add deduplication section for admins
+    with st.expander("🧹 Data Maintenance"):
+        st.markdown("### Remove Duplicate Rows")
+        st.write("This will scan the Google Sheet for exact duplicate rows and remove them, keeping only the first occurrence of each duplicate.")
+        
+        if st.button("🔍 Check and Remove Duplicates"):
+            from components.data_loader import deduplicate_sheet_data
+            duplicates_removed = deduplicate_sheet_data(sheet)
+            if duplicates_removed > 0:
+                # Clear the cache to force reload of updated data
+                st.cache_data.clear()
+                st.rerun()
+    
     uploaded_files = st.file_uploader(
         "📂 Upload one or more daily ad reports (.xlsx)",
         type="xlsx",
@@ -61,6 +75,14 @@ def upload_data_to_sheets(all_data, sh):
 
     # Combine uploaded data into one DataFrame
     combined_df = pd.concat(all_data, ignore_index=True)
+    
+    # Remove duplicates within the uploaded batch itself
+    original_upload_count = len(combined_df)
+    combined_df = combined_df.drop_duplicates(keep='first')
+    internal_duplicates_removed = original_upload_count - len(combined_df)
+    
+    if internal_duplicates_removed > 0:
+        st.info(f"ℹ️ Removed {internal_duplicates_removed} duplicate row(s) within the uploaded files.")
 
     # Add "account_name" column using the helper function (normalized name)
     if 'campaign_name' in combined_df.columns:
@@ -77,6 +99,41 @@ def upload_data_to_sheets(all_data, sh):
     combined_df['report_date'] = pd.to_datetime(combined_df['report_date'])
     if not existing.empty and 'report_date' in existing.columns:
         existing['report_date'] = pd.to_datetime(existing['report_date'])
+        
+        # Check for exact duplicate rows (all columns match)
+        if not existing.empty:
+            # Find common columns between upload and existing data
+            common_columns = list(set(combined_df.columns) & set(existing.columns))
+            
+            if common_columns:
+                # Convert datetime columns to string for comparison
+                combined_df_comparison = combined_df.copy()
+                existing_comparison = existing.copy()
+                
+                for col in common_columns:
+                    if combined_df_comparison[col].dtype == 'datetime64[ns]':
+                        combined_df_comparison[col] = combined_df_comparison[col].dt.strftime('%Y-%m-%d')
+                    if existing_comparison[col].dtype == 'datetime64[ns]':
+                        existing_comparison[col] = existing_comparison[col].dt.strftime('%Y-%m-%d')
+                
+                # Create a temporary merge key for exact duplicate detection
+                combined_df_comparison['_temp_merge_key'] = combined_df_comparison[common_columns].astype(str).apply(lambda x: '|'.join(x), axis=1)
+                existing_comparison['_temp_merge_key'] = existing_comparison[common_columns].astype(str).apply(lambda x: '|'.join(x), axis=1)
+                
+                # Find exact duplicates
+                exact_duplicates = combined_df_comparison[combined_df_comparison['_temp_merge_key'].isin(existing_comparison['_temp_merge_key'])]
+                
+                if not exact_duplicates.empty:
+                    st.warning(f"⚠️ Found {len(exact_duplicates)} exact duplicate row(s) that already exist in the sheet.")
+                    
+                    # Remove exact duplicates from upload
+                    combined_df = combined_df[~combined_df_comparison['_temp_merge_key'].isin(existing_comparison['_temp_merge_key'])]
+                    st.info(f"✅ Filtered out {len(exact_duplicates)} exact duplicate row(s) from upload.")
+                    
+                    # If no new data remains after filtering duplicates, stop here
+                    if combined_df.empty:
+                        st.info("ℹ️ No new data to upload after filtering duplicates.")
+                        return
 
         # Normalize campaign_id columns for reliable joins
         if 'campaign_id' in combined_df.columns and 'campaign_id' in existing.columns:
@@ -123,6 +180,9 @@ def upload_data_to_sheets(all_data, sh):
                         how='left',
                         indicator=True
                     ).query('_merge == "left_only"').drop(columns=['_merge'])
+                    
+                    # Combine with existing data
+                    final_df = pd.concat([existing, final_df], ignore_index=True)
                     st.info(f"✅ Skipped {len(duplicate_rows)} duplicate rows.")
             else:
                 # No duplicates: just combine everything

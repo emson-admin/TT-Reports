@@ -138,23 +138,59 @@ def render_top_campaigns(filtered_data):
                 st.markdown("### 📊 Remaining Campaigns")
                 
                 # Get the remaining campaigns (after the top 3)
-                remaining_campaigns = all_campaign_summary.iloc[3:].copy()
+                # Add an original rank based on their order in all_campaign_summary
+                remaining_campaigns_df = all_campaign_summary.iloc[3:].copy().reset_index(drop=True)
+                remaining_campaigns_df.insert(0, '_OriginalRank', remaining_campaigns_df.index + 4)
+
+                # --- Sorting Controls ---
+                sort_options_map = {'Original Performance': '_OriginalRank'}
+                if 'campaign_name' in remaining_campaigns_df.columns:
+                    sort_options_map['Campaign Name'] = 'campaign_name'
+                if 'orders_(sku)' in remaining_campaigns_df.columns:
+                    sort_options_map['Orders'] = 'orders_(sku)'
+                if 'cost' in remaining_campaigns_df.columns:
+                    sort_options_map['Spend'] = 'cost'
+                if 'gross_revenue' in remaining_campaigns_df.columns:
+                    sort_options_map['Revenue'] = 'gross_revenue'
+                if 'roi' in remaining_campaigns_df.columns:
+                    sort_options_map['ROI'] = 'roi'
                 
-                # Format the columns for display
-                display_df = remaining_campaigns.copy()
+                col_sort_by, col_sort_order = st.columns(2)
+                with col_sort_by:
+                    sort_by_display = st.selectbox(
+                        "Sort remaining by:",
+                        options=list(sort_options_map.keys()),
+                        key='remaining_sort_by',
+                        index=0 # Default to 'Original Performance'
+                    )
+                with col_sort_order:
+                    sort_order_display = st.radio(
+                        "Order:",
+                        options=["Ascending", "Descending"],
+                        key='remaining_sort_order',
+                        index=0, # Default to Ascending for Original Performance (4, 5, 6...)
+                        horizontal=True
+                    )
                 
-                # Format the numeric columns
+                actual_sort_column = sort_options_map[sort_by_display]
+                is_ascending = sort_order_display == "Ascending"
+                
+                sorted_df = remaining_campaigns_df.sort_values(by=actual_sort_column, ascending=is_ascending)
+                
+                # Prepare dataframe for display (after sorting)
+                display_df = sorted_df.reset_index(drop=True)
+                # Add the visual rank column, which is always 4, 5, 6... for the current view
+                display_df.insert(0, 'Rank', display_df.index + 4)
+                
+                # Format the numeric columns for display
                 if 'cost' in display_df.columns:
                     display_df['cost'] = display_df['cost'].apply(lambda x: f"${x:,.2f}")
-                
                 if 'gross_revenue' in display_df.columns:
                     display_df['gross_revenue'] = display_df['gross_revenue'].apply(lambda x: f"${x:,.2f}")
-                
                 if 'roi' in display_df.columns:
-                    display_df['roi'] = display_df['roi'].apply(lambda x: f"{x:.2f}x")
-                
-                if rank_column == 'orders_(sku)' and 'orders_(sku)' in display_df.columns:
-                    display_df['orders_(sku)'] = display_df['orders_(sku)'].apply(lambda x: f"{int(x):,}")
+                    display_df['roi'] = display_df['roi'].apply(lambda x: f"{x:.2f}x" if pd.notnull(x) else "N/A")
+                if 'orders_(sku)' in display_df.columns:
+                    display_df['orders_(sku)'] = display_df['orders_(sku)'].apply(lambda x: f"{int(x):,}" if pd.notnull(x) else "N/A")
                 
                 # Rename columns for better display
                 column_rename = {
@@ -162,27 +198,27 @@ def render_top_campaigns(filtered_data):
                     'cost': 'Spend',
                     'gross_revenue': 'Revenue',
                     'roi': 'ROI',
-                    'orders_(sku)': 'Orders'
+                    'orders_(sku)': 'Orders',
+                    # '_OriginalRank': 'Initial Rank' # Optionally display this
                 }
                 display_df = display_df.rename(columns=column_rename)
                 
-                # Reorder columns for consistent display
-                ordered_columns = ['Campaign']
-                if 'Orders' in display_df.columns:
-                    ordered_columns.append('Orders')
-                if 'Spend' in display_df.columns:
-                    ordered_columns.append('Spend')
-                if 'Revenue' in display_df.columns:
-                    ordered_columns.append('Revenue')
-                if 'ROI' in display_df.columns:
-                    ordered_columns.append('ROI')
-                
-                # Filter to only include columns that exist
-                ordered_columns = [col for col in ordered_columns if col in display_df.columns]
-                display_df = display_df[ordered_columns]
+                # Reorder columns for consistent display, starting with the new 'Rank'
+                ordered_columns = ['Rank', 'Campaign']
+                if 'Orders' in display_df.columns: ordered_columns.append('Orders')
+                if 'Spend' in display_df.columns: ordered_columns.append('Spend')
+                if 'Revenue' in display_df.columns: ordered_columns.append('Revenue')
+                if 'ROI' in display_df.columns: ordered_columns.append('ROI')
+                # if 'Initial Rank' in display_df.columns: ordered_columns.append('Initial Rank')
+
+                # Filter to only include columns that exist and are in ordered_columns
+                final_display_columns = [col for col in ordered_columns if col in display_df.columns]
+                display_df_final = display_df[final_display_columns]
                 
                 # Display the table
-                st.dataframe(display_df, use_container_width=True)
+                st.dataframe(display_df_final, use_container_width=True)
+            else:
+                st.info("No remaining campaigns to display.")
 
 def render_kpi_summary(filtered_data):
     """Render KPI summary metrics."""
