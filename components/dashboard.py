@@ -133,14 +133,14 @@ def render_top_campaigns(filtered_data):
                 </div>
                 """, unsafe_allow_html=True)
             
-            # Display the remaining campaigns in a table format
-            if len(all_campaign_summary) > 3:
-                st.markdown("### 📊 Remaining Campaigns")
+            # Display all campaigns in a table format
+            if len(all_campaign_summary) > 0:
+                st.markdown("### 📊 All Campaigns")
                 
-                # Get the remaining campaigns (after the top 3)
+                # Get all campaigns (including top 3)
                 # Add an original rank based on their order in all_campaign_summary
-                remaining_campaigns_df = all_campaign_summary.iloc[3:].copy().reset_index(drop=True)
-                remaining_campaigns_df.insert(0, '_OriginalRank', remaining_campaigns_df.index + 4)
+                remaining_campaigns_df = all_campaign_summary.copy().reset_index(drop=True)
+                remaining_campaigns_df.insert(0, '_OriginalRank', remaining_campaigns_df.index + 1)
 
                 # --- Sorting Controls ---
                 sort_options_map = {'Original Performance': '_OriginalRank'}
@@ -179,8 +179,6 @@ def render_top_campaigns(filtered_data):
                 
                 # Prepare dataframe for display (after sorting)
                 display_df = sorted_df.reset_index(drop=True)
-                # Add the visual rank column, which is always 4, 5, 6... for the current view
-                display_df.insert(0, 'Rank', display_df.index + 4)
                 
                 # Format the numeric columns for display
                 if 'cost' in display_df.columns:
@@ -203,8 +201,8 @@ def render_top_campaigns(filtered_data):
                 }
                 display_df = display_df.rename(columns=column_rename)
                 
-                # Reorder columns for consistent display, starting with the new 'Rank'
-                ordered_columns = ['Rank', 'Campaign']
+                # Reorder columns for consistent display
+                ordered_columns = ['Campaign']
                 if 'Orders' in display_df.columns: ordered_columns.append('Orders')
                 if 'Spend' in display_df.columns: ordered_columns.append('Spend')
                 if 'Revenue' in display_df.columns: ordered_columns.append('Revenue')
@@ -218,7 +216,7 @@ def render_top_campaigns(filtered_data):
                 # Display the table
                 st.dataframe(display_df_final, use_container_width=True)
             else:
-                st.info("No remaining campaigns to display.")
+                st.info("No campaigns to display.")
 
 def render_kpi_summary(filtered_data):
     """Render KPI summary metrics."""

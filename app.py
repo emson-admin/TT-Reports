@@ -5,6 +5,8 @@ from components.sidebar_filters import render_sidebar_filters
 from components.file_uploader import render_file_uploader
 from components.dashboard import render_dashboard, render_historical_data_view
 from components.data_export import render_export_section
+from components.trending_campaigns import render_trending_campaigns
+from components.ai_insights import render_ai_insights
 from services.email_service import send_weekly_email_data
 from utils.helpers import extract_account
 
@@ -85,6 +87,16 @@ def run_main_app():
     if filtered_data.empty:
         st.info("No data available to display. Please upload reports or check Google Sheet.")
         st.stop()
+    
+    # Add trending campaigns analysis section
+    with st.expander("📊 Trending Campaigns & Performance Analysis", expanded=False):
+        render_trending_campaigns(filtered_data)
+    
+    # Add AI-powered insights section
+    with st.expander("🤖 AI-Powered Insights (Gemini)", expanded=False):
+        # Get Gemini API key from environment or secrets
+        gemini_api_key = os.getenv("GEMINI_API_KEY", "AIzaSyCos9k8pRNeSEz6dEnlmx0UGDgGvC4mdwY")
+        render_ai_insights(filtered_data, gemini_api_key)
     
     # Export data section
     export_data = render_export_section(filtered_data)
