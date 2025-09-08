@@ -14,8 +14,13 @@ def connect_to_google_sheets(secrets):
 
 def deduplicate_sheet_data(sheet):
     """Remove duplicate rows from the Google Sheet and return count of duplicates removed."""
-    # Load all data
-    df = pd.DataFrame(sheet.get_all_records())
+    # Load all data - use get_all_values() instead of get_all_records() to handle duplicate headers
+    all_values = sheet.get_all_values()
+    if not all_values or len(all_values) <= 1:
+        return 0
+    
+    # Create DataFrame from values
+    df = pd.DataFrame(all_values[1:], columns=all_values[0])
     if df.empty:
         return 0
     
@@ -55,7 +60,13 @@ def load_data(_sheet):
     Returns:
         DataFrame with properly formatted columns
     """
-    df = pd.DataFrame(_sheet.get_all_records())
+    # Use get_all_values() to handle potential duplicate headers
+    all_values = _sheet.get_all_values()
+    if not all_values or len(all_values) <= 1:
+        return pd.DataFrame()
+    
+    # Create DataFrame from values
+    df = pd.DataFrame(all_values[1:], columns=all_values[0])
     if not df.empty:
         # Normalize column names
         df.columns = pd.Index([str(col).strip().lower().replace(" ", "_") for col in df.columns])

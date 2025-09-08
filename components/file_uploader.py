@@ -91,9 +91,13 @@ def upload_data_to_sheets(all_data, sh):
         # If campaign_name is somehow missing in uploaded data, fill with default
         combined_df['account_name'] = "Other Accounts" 
 
-    # Load existing data from sheet
-    existing = pd.DataFrame(sh.get_all_records())
-    existing.columns = pd.Index([str(col).strip().lower().replace(" ", "_") for col in existing.columns])
+    # Load existing data from sheet - use get_all_values() to handle duplicate headers
+    all_values = sh.get_all_values()
+    if all_values and len(all_values) > 1:
+        existing = pd.DataFrame(all_values[1:], columns=all_values[0])
+        existing.columns = pd.Index([str(col).strip().lower().replace(" ", "_") for col in existing.columns])
+    else:
+        existing = pd.DataFrame()
 
     # Ensure combined_df['report_date'] exists and is datetime
     combined_df['report_date'] = pd.to_datetime(combined_df['report_date'])

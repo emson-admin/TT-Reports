@@ -31,7 +31,7 @@ def render_sidebar_filters(data):
         st.session_state.start_date = st.session_state.end_date # Adjust start_date to be same as end_date
 
     quick_options = [
-        "Custom Range", "Yesterday", "Last 7 Days", "Last 14 Days",
+        "Custom Range", "Yesterday", "Previous Week", "Last 7 Days", "Last 14 Days",
         "Current Month to Date", "Previous Month", "Last 90 Days", "All-Time"
     ]
 
@@ -76,6 +76,17 @@ def render_sidebar_filters(data):
         if preset == "Yesterday":
             st.session_state.start_date = today - timedelta(days=1)
             st.session_state.end_date = today - timedelta(days=1)
+        elif preset == "Previous Week":
+            # Calculate previous week (Monday to Sunday)
+            # Get the most recent Monday
+            days_since_monday = today.weekday()  # Monday is 0, Sunday is 6
+            last_monday = today - timedelta(days=days_since_monday)
+            # Previous week's Monday is 7 days before
+            prev_week_monday = last_monday - timedelta(days=7)
+            # Previous week's Sunday is 6 days after that Monday
+            prev_week_sunday = prev_week_monday + timedelta(days=6)
+            st.session_state.start_date = prev_week_monday
+            st.session_state.end_date = prev_week_sunday
         elif preset == "Last 7 Days":
             st.session_state.start_date = today - timedelta(days=6)
             st.session_state.end_date = today

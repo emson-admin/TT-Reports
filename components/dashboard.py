@@ -36,8 +36,14 @@ def render_side_metric_charts(filtered_data, side_metrics):
                 with cols[i]:
                     st.altair_chart(chart, use_container_width=False)
 
-def render_top_campaigns(filtered_data):
-    """Render top 3 campaigns based on orders or revenue within the current filtered data."""
+def render_top_campaigns(filtered_data, date_range=None, full_data=None):
+    """Render top 3 campaigns based on orders or revenue within the current filtered data.
+    
+    Args:
+        filtered_data: Current period data
+        date_range: Current date range tuple (start_date, end_date)
+        full_data: Complete dataset for calculating previous period
+    """
     if not filtered_data.empty:
         # Determine which metric to use for ranking (prefer orders, then revenue)
         rank_column = None
@@ -137,6 +143,59 @@ def render_top_campaigns(filtered_data):
             if len(all_campaign_summary) > 0:
                 st.markdown("### 📊 All Campaigns")
                 
+                # Add toggle for comparing with previous period
+                show_comparison = st.checkbox(
+                    "📊 Compare with Previous Period",
+                    key="show_period_comparison",
+                    help="Shows change from previous period in parentheses (green for positive, red for negative)"
+                )
+                
+                # Calculate previous period data if comparison is enabled
+                if show_comparison and date_range and full_data is not None:
+                    from datetime import timedelta
+                    start_date, end_date = date_range
+                    period_length = (end_date - start_date).days + 1
+                    
+                    # Calculate previous period dates
+                    prev_end_date = start_date - timedelta(days=1)
+                    prev_start_date = prev_end_date - timedelta(days=period_length - 1)
+                    
+                    # Filter data for previous period
+                    prev_data = full_data[
+                        (full_data['report_date'] >= pd.Timestamp(prev_start_date)) &
+                        (full_data['report_date'] <= pd.Timestamp(prev_end_date))
+                    ]
+                    
+                    if not prev_data.empty:
+                        # Aggregate previous period data
+                        prev_metrics = [col for col in metrics_to_aggregate if col in prev_data.columns]
+                        prev_campaign_summary = (prev_data
+                                                .groupby('campaign_name')[prev_metrics]
+                                                .sum()
+                                                .reset_index())
+                        
+                        # Calculate ROI for previous period
+                        if 'gross_revenue' in prev_campaign_summary.columns and 'cost' in prev_campaign_summary.columns:
+                            prev_campaign_summary['roi'] = prev_campaign_summary['gross_revenue'] / prev_campaign_summary['cost']
+                            prev_campaign_summary['roi'] = prev_campaign_summary['roi'].replace([float('inf'), -float('inf')], 0)
+                            prev_campaign_summary['roi'] = prev_campaign_summary['roi'].fillna(0)
+                        
+                        # Merge with current data
+                        all_campaign_summary = all_campaign_summary.merge(
+                            prev_campaign_summary,
+                            on='campaign_name',
+                            how='left',
+                            suffixes=('', '_prev')
+                        )
+                        
+                        # Calculate differences
+                        for col in metrics_to_aggregate + ['roi']:
+                            if col in all_campaign_summary.columns and f'{col}_prev' in all_campaign_summary.columns:
+                                all_campaign_summary[f'{col}_diff'] = all_campaign_summary[col] - all_campaign_summary[f'{col}_prev'].fillna(0)
+                                all_campaign_summary[f'{col}_pct'] = (
+                                    (all_campaign_summary[f'{col}_diff'] / all_campaign_summary[f'{col}_prev'].replace(0, 1)) * 100
+                                ).fillna(0)
+                
                 # Get all campaigns (including top 3)
                 # Add an original rank based on their order in all_campaign_summary
                 remaining_campaigns_df = all_campaign_summary.copy().reset_index(drop=True)
@@ -180,15 +239,85 @@ def render_top_campaigns(filtered_data):
                 # Prepare dataframe for display (after sorting)
                 display_df = sorted_df.reset_index(drop=True)
                 
-                # Format the numeric columns for display
+                # Format the numeric columns for display with comparison if enabled
+                def format_with_comparison(value, prev_value=None, is_currency=False, is_roi=False, is_integer=False, is_cost=False):
+                    """Format value with optional previous period value for comparison."""
+                    if pd.isnull(value):
+                        return "N/A"
+                    
+                    # Format the main value
+                    if is_currency:
+                        formatted = f"${value:,.2f}"
+                    elif is_roi:
+                        formatted = f"{value:.2f}x"
+                    elif is_integer:
+                        formatted = f"{int(value):,}"
+                    else:
+                        formatted = f"{value:,.2f}"
+                    
+                    # Add previous period value if available
+                    if show_comparison and prev_value is not None and not pd.isnull(prev_value):
+                        # Determine color based on whether current is better than previous
+                        # For cost, lower is better; for everything else, higher is better
+                        if is_cost:
+                            color = "green" if value <= prev_value else "red"
+                        else:
+                            color = "green" if value >= prev_value else "red"
+                        
+                        # Format the previous value
+                        if is_currency:
+                            prev_formatted = f"${prev_value:,.0f}"
+                        elif is_roi:
+                            prev_formatted = f"{prev_value:.1f}x"
+                        elif is_integer:
+                            prev_formatted = f"{int(prev_value):,}"
+                        else:
+                            prev_formatted = f"{prev_value:,.0f}"
+                        
+                        formatted = f"{formatted} <span style='color: {color}; font-size: 0.9em;'>({prev_formatted})</span>"
+                    
+                    return formatted
+                
                 if 'cost' in display_df.columns:
-                    display_df['cost'] = display_df['cost'].apply(lambda x: f"${x:,.2f}")
+                    prev_col = 'cost_prev' if show_comparison and 'cost_prev' in display_df.columns else None
+                    display_df['cost'] = display_df.apply(
+                        lambda row: format_with_comparison(
+                            row['cost'], 
+                            row[prev_col] if prev_col else None, 
+                            is_currency=True,
+                            is_cost=True
+                        ), axis=1
+                    )
+                
                 if 'gross_revenue' in display_df.columns:
-                    display_df['gross_revenue'] = display_df['gross_revenue'].apply(lambda x: f"${x:,.2f}")
+                    prev_col = 'gross_revenue_prev' if show_comparison and 'gross_revenue_prev' in display_df.columns else None
+                    display_df['gross_revenue'] = display_df.apply(
+                        lambda row: format_with_comparison(
+                            row['gross_revenue'], 
+                            row[prev_col] if prev_col else None, 
+                            is_currency=True
+                        ), axis=1
+                    )
+                
                 if 'roi' in display_df.columns:
-                    display_df['roi'] = display_df['roi'].apply(lambda x: f"{x:.2f}x" if pd.notnull(x) else "N/A")
+                    prev_col = 'roi_prev' if show_comparison and 'roi_prev' in display_df.columns else None
+                    display_df['roi'] = display_df.apply(
+                        lambda row: format_with_comparison(
+                            row['roi'], 
+                            row[prev_col] if prev_col else None, 
+                            is_roi=True
+                        ), axis=1
+                    )
+                
                 if 'orders_(sku)' in display_df.columns:
-                    display_df['orders_(sku)'] = display_df['orders_(sku)'].apply(lambda x: f"{int(x):,}" if pd.notnull(x) else "N/A")
+                    prev_col = 'orders_(sku)_prev' if show_comparison and 'orders_(sku)_prev' in display_df.columns else None
+                    display_df['orders_(sku)'] = display_df.apply(
+                        lambda row: format_with_comparison(
+                            row['orders_(sku)'], 
+                            row[prev_col] if prev_col else None, 
+                            is_integer=True
+                        ), axis=1
+                    )
                 
                 # Rename columns for better display
                 column_rename = {
@@ -213,13 +342,24 @@ def render_top_campaigns(filtered_data):
                 final_display_columns = [col for col in ordered_columns if col in display_df.columns]
                 display_df_final = display_df[final_display_columns]
                 
-                # Display the table
-                st.dataframe(display_df_final, use_container_width=True)
+                # Display the table (use st.write to support HTML if comparison is enabled)
+                if show_comparison:
+                    # Convert to HTML to support colored text
+                    html_table = display_df_final.to_html(escape=False, index=False)
+                    st.write(html_table, unsafe_allow_html=True)
+                else:
+                    st.dataframe(display_df_final, use_container_width=True)
             else:
                 st.info("No campaigns to display.")
 
-def render_kpi_summary(filtered_data):
-    """Render KPI summary metrics."""
+def render_kpi_summary(filtered_data, date_range=None, full_data=None):
+    """Render KPI summary metrics.
+    
+    Args:
+        filtered_data: Current period data
+        date_range: Current date range tuple (start_date, end_date)
+        full_data: Complete dataset for calculating previous period
+    """
     st.subheader("📌 Summary Metrics")
 
     if not filtered_data.empty:
@@ -245,8 +385,8 @@ def render_kpi_summary(filtered_data):
         col4.metric("📦 Total Orders", f"{int(total_orders):,}")
         col5.metric("🧾 Avg Cost/Order", f"${avg_cpo:,.2f}")
         
-        # Add the top campaigns section
-        render_top_campaigns(filtered_data)
+        # Add the top campaigns section with date_range and full_data for comparison
+        render_top_campaigns(filtered_data, date_range, full_data)
     else:
         st.info("No data to summarize for the current filter selection.")
 
@@ -303,7 +443,8 @@ def render_dashboard(data, filter_options, sheet):
     # Side-by-side charts
     render_side_metric_charts(filtered_data, filter_options["side_metrics"])
     
-    # KPI summary
-    render_kpi_summary(filtered_data)
+    # KPI summary with date range and full data for comparison
+    date_range = filter_options.get("date_range")
+    render_kpi_summary(filtered_data, date_range, data)
     
     return filtered_data
