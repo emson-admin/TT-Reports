@@ -16,19 +16,22 @@ def render_export_section(filtered_data):
             help="Aggregate data by day, week (Monday start), or calendar month"
         )
 
+        # Create a copy to avoid SettingWithCopyWarning
+        export_data = filtered_data.copy()
+        
         # Ensure datetime
-        filtered_data['report_date'] = pd.to_datetime(filtered_data['report_date'])
+        export_data['report_date'] = pd.to_datetime(export_data['report_date'])
 
         # Assign period
         if export_granularity == "Weekly":
-            filtered_data['period'] = filtered_data['report_date'].dt.to_period("W").apply(lambda r: r.start_time)
+            export_data['period'] = export_data['report_date'].dt.to_period("W").apply(lambda r: r.start_time)
         elif export_granularity == "Monthly":
-            filtered_data['period'] = filtered_data['report_date'].dt.to_period("M").apply(lambda r: r.start_time)
+            export_data['period'] = export_data['report_date'].dt.to_period("M").apply(lambda r: r.start_time)
         else:
-            filtered_data['period'] = filtered_data['report_date'].dt.date
+            export_data['period'] = export_data['report_date'].dt.date
 
         # Process export data and generate Excel
-        summary_df, output, file_name = process_export_data(filtered_data, export_granularity)
+        summary_df, output, file_name = process_export_data(export_data, export_granularity)
         
         # Download button
         if not summary_df.empty:  # Only show download if there's data

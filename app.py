@@ -95,7 +95,7 @@ def run_main_app():
     # Add AI-powered insights section
     with st.expander("🤖 AI-Powered Insights (Gemini)", expanded=False):
         # Get Gemini API key from environment or secrets
-        gemini_api_key = os.getenv("GEMINI_API_KEY", "AIzaSyCos9k8pRNeSEz6dEnlmx0UGDgGvC4mdwY")
+        gemini_api_key = os.getenv("GEMINI_API_KEY")
         render_ai_insights(filtered_data, gemini_api_key)
     
     # Export data section

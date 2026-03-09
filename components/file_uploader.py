@@ -34,10 +34,45 @@ def render_file_uploader(sheet):
             try:
                 df = pd.read_excel(file)
 
-                # Clean & normalize
-                df.columns = df.columns.astype(str).str.strip().str.lower().str.replace(" ", "_")
+                # Clean & normalize column names
+                df.columns = df.columns.astype(str).str.strip().str.lower().str.replace(" ", "_").str.replace("(", "").str.replace(")", "")
                 
-                # Parse date from filename
+                # Expected TikTok columns (core columns that should always be present)
+                expected_columns = {'campaign_id', 'campaign_name', 'cost', 'net_cost', 'orders_sku', 'cost_per_order', 'gross_revenue', 'roi', 'currency'}
+
+                # Optional columns that TikTok sometimes includes
+                optional_columns = {'current_budget', 'daily_budget'}
+                actual_columns = set(df.columns)
+                
+                # Check if format changed (only show warnings for missing core columns)
+                missing_cols = expected_columns - actual_columns
+                if missing_cols:
+                    st.warning(f"⚠️ Missing expected columns in {file.name}: {missing_cols}")
+                
+                # Track new columns but show summary later (excluding known optional columns)
+                extra_cols = actual_columns - expected_columns - optional_columns
+                if extra_cols and 'new_columns_found' not in st.session_state:
+                    st.session_state.new_columns_found = extra_cols
+                
+                # Handle new TikTok format - map column names
+                column_mapping = {
+                    'campaign_id': 'campaign_id',
+                    'campaign_name': 'campaign_name', 
+                    'cost': 'cost',
+                    'net_cost': 'net_cost',
+                    'orders_sku': 'orders_(sku)',
+                    'cost_per_order': 'cost_per_order',
+                    'gross_revenue': 'gross_revenue',
+                    'roi': 'roi',
+                    'currency': 'currency',
+                    'daily_budget': 'daily_budget',
+                    'current_budget': 'current_budget'
+                }
+                
+                # Rename columns to match expected format
+                df = df.rename(columns=column_mapping)
+                
+                # Parse date from filename (required since TikTok removed date column)
                 date_match = re.search(r"\d{4}-\d{2}-\d{2}", file.name)
                 if date_match:
                     report_date = pd.to_datetime(date_match.group())
@@ -50,9 +85,9 @@ def render_file_uploader(sheet):
                 if 'cost' in df.columns:
                     df = df[df['cost'].fillna(0) > 0]
 
-                # Convert campaign_id to string
+                # Convert campaign_id to string (without quote prefix)
                 if 'campaign_id' in df.columns:
-                    df['campaign_id'] = df['campaign_id'].apply(lambda x: f"'{x}")
+                    df['campaign_id'] = df['campaign_id'].astype(str)
 
                 df['upload_date'] = datetime.datetime.now().strftime('%Y-%m-%d')
 
@@ -62,9 +97,15 @@ def render_file_uploader(sheet):
                 st.error(f"❌ Error processing {file.name}: {e}")
 
         if all_data:
+            # Show summary of new columns found
+            if 'new_columns_found' in st.session_state:
+                st.info(f"ℹ️ New TikTok columns detected: {st.session_state.new_columns_found}")
+                
             if st.button("✅ Upload All to Google Sheets"):
                 upload_data_to_sheets(all_data, sheet)
-                # Clear uploader input by resetting session state
+                # Clear session state
+                if 'new_columns_found' in st.session_state:
+                    del st.session_state.new_columns_found
                 st.session_state["clear_uploader"] = True
                 st.rerun()
     return all_data
@@ -75,6 +116,19 @@ def upload_data_to_sheets(all_data, sh):
 
     # Combine uploaded data into one DataFrame
     combined_df = pd.concat(all_data, ignore_index=True)
+    
+    # Ensure combined_df has unique column names
+    seen = {}
+    unique_cols = []
+    for col in combined_df.columns:
+        col_str = str(col)
+        if col_str in seen:
+            seen[col_str] += 1
+            unique_cols.append(f"{col_str}_{seen[col_str]}")
+        else:
+            seen[col_str] = 0
+            unique_cols.append(col_str)
+    combined_df.columns = unique_cols
     
     # Remove duplicates within the uploaded batch itself
     original_upload_count = len(combined_df)
@@ -94,8 +148,22 @@ def upload_data_to_sheets(all_data, sh):
     # Load existing data from sheet - use get_all_values() to handle duplicate headers
     all_values = sh.get_all_values()
     if all_values and len(all_values) > 1:
-        existing = pd.DataFrame(all_values[1:], columns=all_values[0])
-        existing.columns = pd.Index([str(col).strip().lower().replace(" ", "_") for col in existing.columns])
+        # Create DataFrame with potentially duplicate column names
+        headers = all_values[0]
+        
+        # Make column names unique by appending a counter to duplicates
+        seen = {}
+        unique_headers = []
+        for header in headers:
+            header_str = str(header).strip().lower().replace(" ", "_")
+            if header_str in seen:
+                seen[header_str] += 1
+                unique_headers.append(f"{header_str}_{seen[header_str]}")
+            else:
+                seen[header_str] = 0
+                unique_headers.append(header_str)
+        
+        existing = pd.DataFrame(all_values[1:], columns=unique_headers)
     else:
         existing = pd.DataFrame()
 
@@ -154,13 +222,15 @@ def upload_data_to_sheets(all_data, sh):
 
             # If duplicates exist, let user choose whether to skip or overwrite them
             if not duplicate_rows.empty:
-                with st.expander("⚠️ Duplicate Rows Detected"):
-                    st.dataframe(duplicate_rows)
+                st.warning(f"🚨 Found {len(duplicate_rows)} duplicate campaign+date combinations!")
+                with st.expander(f"⚠️ View {len(duplicate_rows)} Duplicate Rows"):
+                    st.dataframe(duplicate_rows[['campaign_id', 'campaign_name', 'report_date', 'cost']])
 
                 # Ask user whether to overwrite or skip duplicate rows
                 overwrite = st.radio(
-                    "⚠️ Duplicate rows detected based on 'campaign_id' and 'report_date'. What would you like to do?",
-                    ("Skip duplicates", "Overwrite duplicates")
+                    f"⚠️ {len(duplicate_rows)} duplicate rows detected based on 'campaign_id' and 'report_date'. What would you like to do?",
+                    ("Skip duplicates", "Overwrite duplicates"),
+                    help="Skip: Keep existing data, ignore new duplicates. Overwrite: Replace existing with new data."
                 )
 
                 if overwrite == "Overwrite duplicates":
@@ -204,10 +274,43 @@ def upload_data_to_sheets(all_data, sh):
     # Get current sheet row count to determine where to append
     existing_records = sh.get_all_values()
     is_first_upload = len(existing_records) == 0
+    
+    # Check if sheet is completely empty or has no valid headers
+    needs_headers = is_first_upload or (len(existing_records) > 0 and not any(existing_records[0]))
+    
+    if needs_headers:
+        st.info("📝 Creating headers for empty sheet...")
+        # Clear sheet first
+        sh.clear()
+        
+    # Always ensure consistent column ordering for the final dataset
+    standard_column_order = [
+        'campaign_id', 'campaign_name', 'cost', 'net_cost', 'orders_(sku)', 
+        'cost_per_order', 'gross_revenue', 'roi', 'currency', 'report_date', 
+        'upload_date', 'account_name', 'daily_budget', 'current_budget'
+    ]
+    
+    # Reorder final_df columns to match standard order, keeping only existing columns
+    if not final_df.empty:
+        existing_cols = [col for col in standard_column_order if col in final_df.columns]
+        extra_cols = [col for col in final_df.columns if col not in standard_column_order]
+        final_column_order = existing_cols + extra_cols
+        final_df = final_df[final_column_order]
+        
+        # Update existing_records after clearing if needed
+        if needs_headers:
+            sh.update('A1', [final_df.columns.tolist()])
+            existing_records = [final_df.columns.tolist()]
+            is_first_upload = False
 
     # Convert any datetime columns to string format for JSON compatibility with gspread
     for col in final_df.select_dtypes(include=['datetime', 'datetime64[ns]']):
         final_df[col] = final_df[col].dt.strftime('%Y-%m-%d')
+    
+    # Ensure upload_date is properly formatted as string (not NaN)
+    if 'upload_date' in final_df.columns:
+        # Fill any NaN values with current date
+        final_df['upload_date'] = final_df['upload_date'].fillna(datetime.datetime.now().strftime('%Y-%m-%d'))
 
     # Build the upload payload
     rows_to_upload = (

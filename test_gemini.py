@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """Test script to verify Gemini API integration."""
 
+import os
 import google.generativeai as genai
 
 def test_gemini_api():
     """Test the Gemini API with the provided key."""
     
     # Configure API key
-    api_key = "AIzaSyCos9k8pRNeSEz6dEnlmx0UGDgGvC4mdwY"
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        print("❌ GEMINI_API_KEY environment variable is not set.")
+        return False
     genai.configure(api_key=api_key)
-    
+
     print("Testing Gemini API connection...")
     print(f"API Key: {api_key[:10]}...{api_key[-4:]}")
     
